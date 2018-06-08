@@ -39,7 +39,11 @@ Actor::Actor(const MWWorld::Ptr& ptr, osg::ref_ptr<const Resource::BulletShape> 
             mShape.reset(new btCylinderShapeZ(btVector3(width, width, height)));
         }
         else
-            mShape.reset(new btCapsuleShapeZ(mHalfExtents.x(), 2*mHalfExtents.z() - 2*mHalfExtents.x()));
+        {
+            //mShape.reset(new btCapsuleShapeZ(mHalfExtents.x(), 2*mHalfExtents.z() - 2*mHalfExtents.x()));
+            // *0.989 allows the player to walk into hallways as narrow as they can in vanilla
+            mShape.reset(new btCapsuleShapeZ(mHalfExtents.x()*0.989, 2*mHalfExtents.z() - 2*mHalfExtents.x()));
+        }
         mRotationallyInvariant = true;
     }
     else
