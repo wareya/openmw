@@ -1,6 +1,6 @@
 #include "actor.hpp"
 
-//#include <BulletCollision/CollisionShapes/btCapsuleShape.h>
+#include <BulletCollision/CollisionShapes/btCapsuleShape.h>
 #include <BulletCollision/CollisionShapes/btCylinderShape.h>
 #include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
@@ -32,9 +32,14 @@ Actor::Actor(const MWWorld::Ptr& ptr, osg::ref_ptr<const Resource::BulletShape> 
     // Use capsule shape only if base is square (nonuniform scaling apparently doesn't work on it)
     if (std::abs(mHalfExtents.x()-mHalfExtents.y())<mHalfExtents.x()*0.05 && mHalfExtents.z() >= mHalfExtents.x())
     {
-        auto height = 2*mHalfExtents.z() - 2*mHalfExtents.x();
-        auto width = mHalfExtents.x();
-        mShape.reset(new btCylinderShapeZ(btVector3(width, width, height)));
+        if(false)
+        {
+            auto height = 2*mHalfExtents.z() - 2*mHalfExtents.x();
+            auto width = mHalfExtents.x();
+            mShape.reset(new btCylinderShapeZ(btVector3(width, width, height)));
+        }
+        else
+            mShape.reset(new btCapsuleShapeZ(mHalfExtents.x(), 2*mHalfExtents.z() - 2*mHalfExtents.x()));
         mRotationallyInvariant = true;
     }
     else

@@ -141,13 +141,18 @@ namespace MWPhysics
              *          +--+                         +--------
              *    ==============================================
              */
+            float upDistance = 0;
             if (mHaveMoved)
             {
                 mHaveMoved = false;
                 mUpStepper.doTrace(mColObj, position, position+osg::Vec3f(0.0f,0.0f,sStepSizeUp), mColWorld);
-                if(mUpStepper.mFraction < std::numeric_limits<float>::epsilon())
-                    return false; // didn't even move the smallest representable amount
-                                  // (TODO: shouldn't this be larger? Why bother with such a small amount?)
+                upDistance = sStepSizeUp * mUpStepper.mFraction;
+                // didn't move
+                if(upDistance < 0.01f)
+                    return false;
+                // hit a badly sloped wall/ceiling
+                if(mUpStepper.mPlaneNormal.z() < 0)
+                    return false;
             }
 
             /*
@@ -164,9 +169,23 @@ namespace MWPhysics
              *    ==============================================
              */
             osg::Vec3f tracerPos = mUpStepper.mEndPos;
+            if(upDistance > 0.01 && mUpStepper.mHitObject != NULL)
+                tracerPos.z() -= 0.01;
+            else if (mUpStepper.mHitObject != NULL)
+                tracerPos.z() = position.z();
             mTracer.doTrace(mColObj, tracerPos, tracerPos + toMove, mColWorld);
-            if(mTracer.mFraction < std::numeric_limits<float>::epsilon())
-                return false; // didn't even move the smallest representable amount
+            
+            float moveDistance = (mTracer.mEndPos - tracerPos).length();
+            if(mTracer.mHitObject != NULL)
+                moveDistance = std::max(moveDistance-0.01f, 0.0f);
+            // didn't move
+            if(moveDistance == 0.0f)
+                return false;
+            osg::Vec3f moveDirection = toMove;
+            moveDirection.normalize();
+            
+            osg::Vec3f downStepOrigin = tracerPos + moveDirection*moveDistance;
+            
             
             // FIXME: non-levitating aerial actors should not step down to a lower location than their initial location
             /*
@@ -184,33 +203,52 @@ namespace MWPhysics
              *          +--+            +--+
              *    ==============================================
              */
-            mDownStepper.doTrace(mColObj, mTracer.mEndPos, mTracer.mEndPos-osg::Vec3f(0.0f,0.0f,sStepSizeDown), mColWorld);
+            mDownStepper.doTrace(mColObj, downStepOrigin, downStepOrigin-osg::Vec3f(0.0f,0.0f,sStepSizeDown), mColWorld);
             if (!canStepDown(mDownStepper))
             {
+                // If we can't retry
+                if (mTracer.mHitObject != NULL || toMove.length2() > sMinStep*sMinStep)
+                {
+                    //std::cerr << "can't retry step thing\n";
+                    return false;
+                }
                 // Try again with increased step length
-                if (mTracer.mFraction < 1.0f || toMove.length2() > sMinStep*sMinStep)
-                    return false;
-
-                osg::Vec3f direction = toMove;
-                direction.normalize();
-                mTracer.doTrace(mColObj, tracerPos, tracerPos + direction*sMinStep, mColWorld);
+                mTracer.doTrace(mColObj, tracerPos, tracerPos + moveDirection*sMinStep, mColWorld);
                 if (mTracer.mFraction < 0.001f)
+                {
+                    //std::cerr << "bad fraction step thing\n";
                     return false;
-
-                mDownStepper.doTrace(mColObj, mTracer.mEndPos, mTracer.mEndPos-osg::Vec3f(0.0f,0.0f,sStepSizeDown), mColWorld);
+                }
+            
+                moveDistance = (mTracer.mEndPos - tracerPos).length();
+                if(mTracer.mHitObject != NULL)
+                    moveDistance = std::max(moveDistance-0.01f, 0.0f);
+                // didn't move
+                if(moveDistance == 0.0f)
+                    return false;
+                downStepOrigin = tracerPos + moveDirection*moveDistance;
+                
+                mDownStepper.doTrace(mColObj, downStepOrigin, downStepOrigin-osg::Vec3f(0.0f,0.0f,sStepSizeDown), mColWorld);
                 if (!canStepDown(mDownStepper))
+                {
+                    //std::cerr << "retry failed\n";
                     return false;
+                }
             }
             if (mDownStepper.mFraction < 1.0f)
             {
                 // only step down onto semi-horizontal surfaces. don't step down onto the side of a house or a wall.
                 // TODO: stepper.mPlaneNormal does not appear to be reliable - needs more testing
                 // NOTE: caller's variables 'position' & 'remainingTime' are modified here
-                position = mDownStepper.mEndPos;
+                float dropDistance = sStepSizeDown*mDownStepper.mFraction;
+                position = downStepOrigin;
+                if(dropDistance > sGroundOffset+0.01)
+                    position.z() -= dropDistance-(sGroundOffset+0.01);
                 remainingTime *= (1.0f-mTracer.mFraction); // remaining time is proportional to remaining distance
                 mHaveMoved = true;
                 return true;
             }
+            //std::cerr << "general downstep failure\n";
             return false;
         }
     };
@@ -219,16 +257,21 @@ namespace MWPhysics
     {
     private:
         ///Project a vector u on another vector v
-        static inline osg::Vec3f project(const osg::Vec3f& u, const osg::Vec3f &v)
+        static inline osg::Vec3f projectAlreadyNormalized(const osg::Vec3f& u, const osg::Vec3f &v)
         {
             return v * (u * v);
             //            ^ dot product
+        }
+        /// For non-normalized v
+        static inline osg::Vec3f project(const osg::Vec3f& u, const osg::Vec3f &v)
+        {
+            return v * ((u * v)/(v * v));
         }
 
         ///Helper for computing the character sliding
         static inline osg::Vec3f slide(const osg::Vec3f& direction, const osg::Vec3f &planeNormal)
         {
-            return direction - project(direction, planeNormal);
+            return direction - projectAlreadyNormalized(direction, planeNormal);
         }
 
     public:
@@ -352,9 +395,36 @@ namespace MWPhysics
              * The initial velocity was set earlier (see above).
              */
             float remainingTime = time;
-            for(int iterations = 0; iterations < sMaxIterations && remainingTime > 0.01f; ++iterations)
+            int iterations;
+            int numTimesSlid = 0;
+            int numTimesSlidFallback = 0;
+            bool stepsStillOkay = true;
+            osg::Vec3f lastSlideNormal(0,0,1);
+            osg::Vec3f lastSlideFallbackNormal(0,0,1);
+            // FIXME: fudge factor isn't taken into account when doing traces, so we can get closer than it to an obstacle if we don't hit it that frame
+            // (the fudge factor is taken in the direction we travel, but even measuring it that way we can get too close)
+            const float general_fudge = 0.01;
+            const float general_fudge_sq = general_fudge*general_fudge;
+            for(iterations = 0; iterations < sMaxIterations && remainingTime > 0.01f; ++iterations)
             {
-                osg::Vec3f nextpos = newPosition + velocity * remainingTime;
+                float forNanCheck = velocity.length2();
+                if (forNanCheck != forNanCheck)
+                {
+                    //std::cerr << "bad velocity " << forNanCheck << "\n";
+                    break;
+                }
+                
+                if ((velocity * remainingTime).length2() < 0.0001f)
+                {
+                    //std::cerr << "not moving from position " << newPosition.z() << " because of a lack of motion\n";
+                    break;
+                }
+                
+                osg::Vec3f fudgeVelocity = velocity;
+                fudgeVelocity.normalize();
+                fudgeVelocity *= general_fudge;
+                
+                osg::Vec3f nextpos = newPosition + velocity * remainingTime + fudgeVelocity;
 
                 // If not able to fly, don't allow to swim up into the air
                 if(!isFlying &&                   // can't fly
@@ -367,30 +437,18 @@ namespace MWPhysics
                     continue; // velocity updated, calculate nextpos again
                 }
 
-                if((newPosition - nextpos).length2() > 0.0001)
-                {
-                    // trace to where character would go if there were no obstructions
-                    tracer.doTrace(colobj, newPosition, nextpos, collisionWorld);
+                // trace to where character would go if there were no obstructions
+                tracer.doTrace(colobj, newPosition, nextpos, collisionWorld);
 
-                    // check for obstructions
-                    if(tracer.mFraction >= 1.0f)
-                    {
-                        newPosition = tracer.mEndPos; // ok to move, so set newPosition
-                        break;
-                    }
-                }
-                else
+                // check for obstructions
+                if(tracer.mHitObject == NULL)
                 {
-                    // The current position and next position are nearly the same, so just exit.
-                    // Note: Bullet can trigger an assert in debug modes if the positions
-                    // are the same, since that causes it to attempt to normalize a zero
-                    // length vector (which can also happen with nearly identical vectors, since
-                    // precision can be lost due to any math Bullet does internally). Since we
-                    // aren't performing any collision detection, we want to reject the next
-                    // position, so that we don't slowly move inside another object.
+                    newPosition = tracer.mEndPos - fudgeVelocity; // ok to move, so set newPosition
+                    //std::cerr << "jumped to new position " << newPosition.z() << " - no obstruction\n";
                     break;
                 }
-
+                
+                // this actually just causes problems because it can eject the actor into another solid in acute concave corners
                 // We are touching something.
                 if (tracer.mFraction < 1E-9f)
                 {
@@ -398,19 +456,21 @@ namespace MWPhysics
                     osg::Vec3f backOff = (newPosition - tracer.mHitPoint) * 1E-2f;
                     newPosition += backOff;
                 }
-
                 // We hit something. Check if we can step up.
                 float hitHeight = tracer.mHitPoint.z() - tracer.mEndPos.z() + halfExtents.z();
                 osg::Vec3f oldPosition = newPosition;
                 bool result = false;
-                // FIXME: this might be the wrong set of checks for whether the actor should be able to stairstep
-                // FIXME: right now the movement solver depends on stepping to correctly place the actor back "on the ground" when they land
-                // this is the cause of bug http://bugs.openmw.org/issues/2256
-                if (hitHeight < sStepSizeUp && !isActor(tracer.mHitObject) && (physicActor->getOnGround() || velocity.z() <= 0.0f))
+                // FIXME: stairstepping should be part of rectifying collisions with walls
+                // right now it can cause problems for crevice detection (despite the catch for it) and it can fail in some cases it shouldn't
+                if (stepsStillOkay && tracer.mPlaneNormal.z() > 0 && hitHeight < sStepSizeUp && !isActor(tracer.mHitObject) && (physicActor->getOnGround() || velocity.z() <= 0.0f))
                 {
                     // Try to step up onto it.
                     // NOTE: stepMove does not allow stepping over, modifies newPosition if successful
+                    osg::Vec3f tempPosition = newPosition;
                     result = stepper.step(newPosition, velocity*remainingTime, remainingTime);
+                    // If we barely moved we're probably walking into a wall and stairstepping is unnecessary / breaks crevice detection
+                    if (result && (tempPosition - newPosition).length2() < general_fudge_sq)
+                        stepsStillOkay = false;
                 }
                 if (result)
                 {
@@ -421,33 +481,94 @@ namespace MWPhysics
                 }
                 else
                 {
-                    // Can't move this way, try to find another spot along the plane
+                    // travel to the place on the collision surface we're sliding from
+                    remainingTime *= (1-tracer.mFraction);
+                    // but only if it's further than the fudge factor
+                    if ((tracer.mEndPos - newPosition).length2() > general_fudge_sq)
+                        newPosition = tracer.mEndPos - fudgeVelocity;
+                    
+                    // Can't move past this surface, try to find another spot along the plane
                     osg::Vec3f newVelocity = slide(velocity, tracer.mPlaneNormal);
 
-                    // Do not allow sliding upward if there is gravity.
-                    // Stepping will have taken care of that.
-                    // FIXME: Cancelling out upwards motion here, if in the air, breaks jumping while hugging walls
+                    // Do not allow sliding to accelerate us upwards. Stepping will take care of walkable slopes.
                     if(physicActor->getOnGround() && !(newPosition.z() < swimlevel || isFlying))
-                        newVelocity.z() = std::min(newVelocity.z(), 0.0f);
-
-                    if ((newVelocity-velocity).length2() < 0.01)
+                        newVelocity.z() = std::min(newVelocity.z(), std::max(0.0f, velocity.z()));
+                    
+                    
+                    // check for colliding with acute convex corners, "crevice detection"
+                    if ((numTimesSlid > 0 && lastSlideNormal * tracer.mPlaneNormal <= 0.0f) || (numTimesSlid > 1 && lastSlideFallbackNormal * tracer.mPlaneNormal <= 0.0f))
+                    {
+                        // if we've already done this it's probably stuck geometry
+                        if(numTimesSlidFallback > 2)
+                        {
+                            std::cerr << "cancelling loop at position " << newPosition.z() << " because we got trapped against complex acute geometry\n";
+                            break;
+                        }
+                        // if we've already done this we should pick the best last normal to use
+                        osg::Vec3f bestNormal = lastSlideNormal;
+                        float product_older = 1;
+                        float product_newer = 1;
+                        float product_cross = 1;
+                        float product_best = 1;
+                        
+                        product_older = lastSlideNormal * tracer.mPlaneNormal;
+                        product_best = product_older;
+                        if(numTimesSlid > 1)
+                        {
+                            product_newer = lastSlideFallbackNormal * tracer.mPlaneNormal;
+                            product_cross = lastSlideFallbackNormal * lastSlideNormal;
+                            // check for all three being acute or right angled
+                            if(product_older <= 0.0 && product_newer <= 0.0 && product_cross <= 0.0)
+                            {
+                                std::cerr << "cancelling loop at position " << newPosition.z() << " because we got reached a three-sided convex acute angle\n";
+                                break;
+                            }
+                            // otherwise we don't care about product_cross
+                            
+                            if (product_newer <= 0.0 && product_newer <= product_older)
+                            {
+                                bestNormal = lastSlideFallbackNormal;
+                                product_best = product_newer;
+                            }
+                        }
+                        if(product_best <= 0.0)
+                        {
+                            // otherwise constrain our direction to that of the seam
+                            osg::Vec3 constraintVector = bestNormal ^ tracer.mPlaneNormal;
+                            if(constraintVector.length2() > 0) // only if it's not zero length
+                            {
+                                newVelocity = project(velocity, constraintVector);
+                                numTimesSlidFallback += 1;
+                            }
+                        }
+                    }
+                    
+                    if ((newVelocity * origVelocity) <= 0.0f) // dot product 
+                    {
+                        std::cerr << "cancelling loop at position " << newPosition.z() << " because of velocity cancellation\n";
                         break;
-                    if ((newVelocity * origVelocity) <= 0.f)
-                        break; // ^ dot product
-
+                    }
+                    
+                    numTimesSlid += 1;
+                    lastSlideFallbackNormal = lastSlideNormal;
+                    lastSlideNormal = tracer.mPlaneNormal;
+                    
                     velocity = newVelocity;
                 }
             }
+            //if (iterations == sMaxIterations)
+            //    std::cerr << "ran out of iterations " << numTimesSlid << " " << numTimesSlidFallback << "\n";
 
             bool isOnGround = false;
             bool isOnSlope = false;
-            if (!(inertia.z() > 0.f) && !(newPosition.z() < swimlevel))
+            if (inertia.z() <= 0.f && newPosition.z() >= swimlevel)
             {
                 osg::Vec3f from = newPosition;
                 osg::Vec3f to = newPosition - (physicActor->getOnGround() ?
                              osg::Vec3f(0,0,sStepSizeDown + 2*sGroundOffset) : osg::Vec3f(0,0,2*sGroundOffset));
                 tracer.doTrace(colobj, from, to, collisionWorld);
-                if(tracer.mFraction < 1.0f
+                
+                if(tracer.mHitObject != NULL
                         && tracer.mHitObject->getBroadphaseHandle()->m_collisionFilterGroup != CollisionType_Actor)
                 {
                     const btCollisionObject* standingOn = tracer.mHitObject;
@@ -457,19 +578,34 @@ namespace MWPhysics
 
                     if (standingOn->getBroadphaseHandle()->m_collisionFilterGroup == CollisionType_Water)
                         physicActor->setWalkingOnWater(true);
-                    if (!isFlying)
-                        newPosition.z() = tracer.mEndPos.z() + sGroundOffset;
 
                     isOnGround = true;
 
                     isOnSlope = !isWalkableSlope(tracer.mPlaneNormal);
+                    
+                    // reject from ground
+                    if (!isFlying && !isOnSlope)
+                    {
+                        float distance = (newPosition.z() - tracer.mEndPos.z()) - general_fudge;
+                        if(distance > 0)
+                            newPosition.z() -= distance;
+                        
+                        from = newPosition;
+                        to = newPosition + osg::Vec3f(0,0,sGroundOffset+general_fudge);
+                        tracer.doTrace(colobj, from, to, collisionWorld);
+                        
+                        if(tracer.mHitObject == NULL)
+                            newPosition.z() += sGroundOffset;
+                        else if (tracer.mEndPos.z() - newPosition.z() > general_fudge)
+                            newPosition.z() += (tracer.mEndPos.z() - newPosition.z()) - general_fudge;
+                    }
                 }
                 else
                 {
                     // standing on actors is not allowed (see above).
                     // in addition to that, apply a sliding effect away from the center of the actor,
                     // so that we do not stay suspended in air indefinitely.
-                    if (tracer.mFraction < 1.0f && tracer.mHitObject->getBroadphaseHandle()->m_collisionFilterGroup == CollisionType_Actor)
+                    if (tracer.mHitObject != NULL && tracer.mHitObject->getBroadphaseHandle()->m_collisionFilterGroup == CollisionType_Actor)
                     {
                         if (osg::Vec3f(velocity.x(), velocity.y(), 0).length2() < 100.f*100.f)
                         {
