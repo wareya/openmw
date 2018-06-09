@@ -57,6 +57,7 @@ namespace MWPhysics
     static const float sStepSizeDown = 62.0f;
     static const float sMinStep = 10.f;
     static const float sGroundOffset = 1.0f;
+    static const float fudgeFactor = 0.01f;
 
     // Arbitrary number. To prevent infinite loops. They shouldn't happen but it's good to be prepared.
     static const int sMaxIterations = 8;
@@ -171,7 +172,7 @@ namespace MWPhysics
             else if (mUpStepper.mHitObject != NULL)
                 tracerPos.z() = position.z();
             mTracer.doTrace(mColObj, tracerPos, tracerPos + toMove, mColWorld);
-            
+
             float moveDistance = (mTracer.mEndPos - tracerPos).length();
             if(mTracer.mHitObject != NULL)
                 moveDistance = std::max(moveDistance-0.01f, 0.0f);
@@ -182,8 +183,7 @@ namespace MWPhysics
             moveDirection.normalize();
             
             osg::Vec3f downStepOrigin = tracerPos + moveDirection*moveDistance;
-            
-            
+
             // FIXME: non-levitating aerial actors should not step down to a lower location than their initial location
             /*
              * Try moving back down sStepSizeDown using stepper.
@@ -492,15 +492,14 @@ namespace MWPhysics
                     // Do not allow sliding to accelerate us upwards. Stepping will take care of walkable slopes.
                     if(physicActor->getOnGround() && !(newPosition.z() < swimlevel || isFlying))
                         newVelocity.z() = std::min(newVelocity.z(), std::max(0.0f, velocity.z()));
-                    
-                    
+
                     // check for colliding with acute convex corners, "crevice detection"
                     if ((numTimesSlid > 0 && lastSlideNormal * tracer.mPlaneNormal <= 0.0f) || (numTimesSlid > 1 && lastSlideFallbackNormal * tracer.mPlaneNormal <= 0.0f))
                     {
                         // if we've already done this it's probably stuck geometry
                         if(numTimesSlidFallback > 2)
                         {
-                            std::cerr << "cancelling loop at position " << newPosition.z() << " because we got trapped against complex acute geometry\n";
+                            //std::cerr << "cancelling loop at position " << newPosition.z() << " because we got trapped against complex acute geometry\n";
                             break;
                         }
                         // if we've already done this we should pick the best last normal to use
@@ -519,7 +518,7 @@ namespace MWPhysics
                             // check for all three being acute or right angled
                             if(product_older <= 0.0 && product_newer <= 0.0 && product_cross <= 0.0)
                             {
-                                std::cerr << "cancelling loop at position " << newPosition.z() << " because we got reached a three-sided convex acute angle\n";
+                                //std::cerr << "cancelling loop at position " << newPosition.z() << " because we got reached a three-sided convex acute angle\n";
                                 break;
                             }
                             // otherwise we don't care about product_cross
@@ -541,11 +540,11 @@ namespace MWPhysics
                             }
                         }
                     }
-                    
+
                     // FIXME: Should this use origVelocity or velocity?
-                    if ((newVelocity * origVelocity) <= 0.0f) // dot product 
+                    if ((newVelocity * velocity) <= 0.0f) // dot product 
                     {
-                        std::cerr << "cancelling loop at position " << newPosition.z() << " because of velocity cancellation\n";
+                        //std::cerr << "cancelling loop at position " << newPosition.z() << " because of velocity cancellation\n";
                         break;
                     }
                     
@@ -567,7 +566,7 @@ namespace MWPhysics
                 osg::Vec3f to = newPosition - (physicActor->getOnGround() ?
                              osg::Vec3f(0,0,sStepSizeDown + 2*sGroundOffset) : osg::Vec3f(0,0,2*sGroundOffset));
                 tracer.doTrace(colobj, from, to, collisionWorld);
-                
+
                 if(tracer.mHitObject != NULL
                         && tracer.mHitObject->getBroadphaseHandle()->m_collisionFilterGroup != CollisionType_Actor)
                 {
