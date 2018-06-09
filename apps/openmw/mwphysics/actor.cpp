@@ -13,6 +13,8 @@
 #include "convert.hpp"
 #include "collisiontype.hpp"
 
+#include <iostream>
+
 namespace MWPhysics
 {
 
@@ -32,15 +34,14 @@ Actor::Actor(const MWWorld::Ptr& ptr, osg::ref_ptr<const Resource::BulletShape> 
     // Use capsule shape only if base is square (nonuniform scaling apparently doesn't work on it)
     if (std::abs(mHalfExtents.x()-mHalfExtents.y())<mHalfExtents.x()*0.05 && mHalfExtents.z() >= mHalfExtents.x())
     {
-        if(false)
+        if(true)
         {
-            auto height = 2*mHalfExtents.z() - 2*mHalfExtents.x();
+            auto height = mHalfExtents.z();
             auto width = mHalfExtents.x();
-            mShape.reset(new btCylinderShapeZ(btVector3(width, width, height)));
+            mShape.reset(new btCylinderShapeZ(btVector3(width*0.989, width*0.989, height)));
         }
         else
         {
-            //mShape.reset(new btCapsuleShapeZ(mHalfExtents.x(), 2*mHalfExtents.z() - 2*mHalfExtents.x()));
             // *0.989 allows the player to walk into hallways as narrow as they can in vanilla
             mShape.reset(new btCapsuleShapeZ(mHalfExtents.x()*0.989, 2*mHalfExtents.z() - 2*mHalfExtents.x()));
         }
