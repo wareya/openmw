@@ -150,9 +150,6 @@ namespace MWPhysics
                 // didn't move
                 if(upDistance < 0.01f)
                     return false;
-                // hit a badly sloped wall/ceiling
-                if(mUpStepper.mPlaneNormal.z() < 0)
-                    return false;
             }
 
             /*
@@ -545,6 +542,7 @@ namespace MWPhysics
                         }
                     }
                     
+                    // FIXME: Should this use origVelocity or velocity?
                     if ((newVelocity * origVelocity) <= 0.0f) // dot product 
                     {
                         std::cerr << "cancelling loop at position " << newPosition.z() << " because of velocity cancellation\n";
