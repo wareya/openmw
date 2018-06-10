@@ -492,7 +492,7 @@ namespace MWPhysics
                     newPosition += backOff;
                 }
                 // We hit something. Check if we can step up.
-                float hitHeight = tracer.mHitPoint.z() - tracer.mEndPos.z() + halfExtents.z();
+                //float hitHeight = tracer.mHitPoint.z() - tracer.mEndPos.z() + halfExtents.z();
                 osg::Vec3f oldPosition = newPosition;
                 bool result = false;
                 // FIXME: stairstepping should be part of rectifying collisions with walls

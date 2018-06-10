@@ -42,7 +42,7 @@ Actor::Actor(const MWWorld::Ptr& ptr, osg::ref_ptr<const Resource::BulletShape> 
         // cylinders cause problems for actor-actor collisions and precise acute crevices so use one with round rdges instead
         if(true)
         {
-            float fuzz = 3.5f;
+            float fuzz = 7.0f;
             auto height = mHalfExtents.z()-fuzz;
             auto width = mHalfExtents.x()*factor-fuzz;
             auto cylinder = new btCylinderShapeZ(btVector3(width, width, height));
