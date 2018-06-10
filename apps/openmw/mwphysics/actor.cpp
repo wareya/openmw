@@ -2,6 +2,8 @@
 
 #include <BulletCollision/CollisionShapes/btCapsuleShape.h>
 #include <BulletCollision/CollisionShapes/btCylinderShape.h>
+#include <BulletCollision/CollisionShapes/btSphereShape.h>
+#include <BulletCollision/CollisionShapes/btMinkowskiSumShape.h>
 #include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 
@@ -34,16 +36,22 @@ Actor::Actor(const MWWorld::Ptr& ptr, osg::ref_ptr<const Resource::BulletShape> 
     // Use capsule shape only if base is square (nonuniform scaling apparently doesn't work on it)
     if (std::abs(mHalfExtents.x()-mHalfExtents.y())<mHalfExtents.x()*0.05 && mHalfExtents.z() >= mHalfExtents.x())
     {
+        // *0.989 allows the player to walk into hallways as narrow as they can in vanilla
+        const double factor = 0.989;
+        //const double factor = 1.0;
+        // cylinders cause problems for actor-actor collisions and precise acute crevices so use one with round rdges instead
         if(true)
         {
-            auto height = mHalfExtents.z();
-            auto width = mHalfExtents.x();
-            mShape.reset(new btCylinderShapeZ(btVector3(width*0.989, width*0.989, height)));
+            float fuzz = 3.5f;
+            auto height = mHalfExtents.z()-fuzz;
+            auto width = mHalfExtents.x()*factor-fuzz;
+            auto cylinder = new btCylinderShapeZ(btVector3(width, width, height));
+            auto sphere = new btSphereShape(fuzz);
+            mShape.reset(new btMinkowskiSumShape(cylinder, sphere));
         }
         else
         {
-            // *0.989 allows the player to walk into hallways as narrow as they can in vanilla
-            mShape.reset(new btCapsuleShapeZ(mHalfExtents.x()*0.989, 2*mHalfExtents.z() - 2*mHalfExtents.x()));
+            mShape.reset(new btCapsuleShapeZ(mHalfExtents.x()*factor, 2*mHalfExtents.z() - 2*mHalfExtents.x()));
         }
         mRotationallyInvariant = true;
     }
